@@ -12,24 +12,8 @@ for f in libdatachannel.so libtinyalsa.so.2 libsamplerate.so; do
 done
 [ -f /root/DroidSansFallbackFull.ttf ] && cp /root/DroidSansFallbackFull.ttf "$SRC/" || true
 
-cat > /etc/systemd/system/dji_ui.service <<UNIT
-[Unit]
-Description=MaixCAM2 action camera (LVGL)
-After=multi-user.target
-Conflicts=launcher.service
-
-[Service]
-Type=simple
-WorkingDirectory=$SRC
-Environment=LD_LIBRARY_PATH=$SRC/lib:/opt/lib
-TimeoutStartSec=0
-ExecStart=$SRC/dji_ui
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+install -m 755 "$(dirname "$0")/start.sh" "$SRC/start.sh"
+install -m 644 "$(dirname "$0")/dji_ui.service" /etc/systemd/system/dji_ui.service
 
 systemctl daemon-reload
 systemctl disable launcher.service maixvision-server.service || true

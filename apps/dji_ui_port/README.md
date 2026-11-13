@@ -91,7 +91,21 @@ ssh root@<board> 'sh -s' < scripts/install.sh
 - 放 CJK 字体 `DroidSansFallbackFull.ttf`
 - 写 systemd 单元 `dji_ui.service`，disable `launcher.service`
 
-回官方界面：`systemctl disable --now dji_ui && systemctl enable --now launcher`
+开机自启与官方界面切换：
+
+```bash
+# 启用（会禁用 launcher / maixvision-server）
+systemctl disable launcher.service maixvision-server.service
+systemctl enable --now dji_ui.service
+
+# 回官方界面
+systemctl disable --now dji_ui.service
+systemctl enable --now launcher.service
+```
+
+`dji_ui.service` 里 `ExecStart=/opt/dji_ui/start.sh`，脚本先 `sleep 6` 再启动，
+给 ISP/摄像头驱动模块留出初始化时间，避免开机即开 sensor 卡死。
+`TimeoutStartSec=0` 是必需的：MaixCAM2 的 rootfs 把 systemd 默认启动超时改成了 5s。
 
 ## 实测
 
