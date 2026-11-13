@@ -137,7 +137,7 @@
          s_last_path[0] = '\0';
      }
 --- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_album.c	2026-11-13 22:12:31.859899631 +0800
++++ b/src/app/pages/page_album.c	2026-11-13 22:31:56.027525052 +0800
 @@ -12,6 +12,42 @@
   *   - 全屏查看时右滑关闭全屏
   */
@@ -273,6 +273,48 @@
      lv_obj_set_style_text_color(storage_lbl, lv_color_hex(COLOR_SECONDARY), 0);
      update_storage_summary(storage_lbl);
  
+@@ -1543,6 +1590,21 @@
+     return g_tile;
+ }
+ 
++/* Signature of the current photo list: skip the expensive grid rebuild when
++ * nothing changed (re-entering the album is then ~instant). */
++static int s_grid_built = 0;
++static uint32_t s_list_sig = 0;
++
++static uint32_t album_list_signature(void)
++{
++    uint32_t h = 2166136261u;
++    for (int i = 0; i < g_photo_count; i++) {
++        for (const char *p = g_photos[i]; *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; }
++    }
++    h ^= (uint32_t)g_photo_count;
++    return h;
++}
++
+ void page_album_refresh(void)
+ {
+     /* 退出相册时可能停留在全屏查看、视频播放或长按菜单界面，下次进入应回到相册主页面。
+@@ -1556,10 +1618,17 @@
+     }
+     g_context_idx = -1;
+ 
+-    /* 重新扫描目录并重建网格：每次进入相册时调用，
+-     * 确保新拍摄的照片/视频立即可见 */
++    /* 重新扫描目录；只有照片列表变化时才重建网格（重建 28 个 cell 是进入相册
++     * 最主要的 UI 阻塞来源） */
+     refresh_photo_list();
++    uint32_t sig = album_list_signature();
++    if (s_grid_built && sig == s_list_sig) {
++        LV_LOG_USER("Album: list unchanged (%d photos), skip rebuild", g_photo_count);
++        return;
++    }
++    s_list_sig = sig;
+     rebuild_grid();
++    s_grid_built = 1;
+ }
+ 
+ void page_album_destroy(void)
 --- a/src/app/pages/page_home.c	2026-10-30 19:06:53.000000000 +0800
 +++ b/src/app/pages/page_home.c	2026-11-13 17:31:57.231148111 +0800
 @@ -3918,3 +3918,18 @@
