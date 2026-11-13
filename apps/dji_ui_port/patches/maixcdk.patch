@@ -1,0 +1,30 @@
+--- a/components/3rd_party/freetype/CMakeLists.txt	2026-11-05 16:00:52.000000000 +0800
++++ b/components/3rd_party/freetype/CMakeLists.txt	2026-11-13 15:03:44.934134770 +0800
+@@ -98,10 +98,10 @@
+ else()
+     message(FATAL_ERROR "No freetype toolchain config for this board, please edit to add freetype support for this board")
+ endif()
+-set(freetype_compile_cmd COMMAND mkdir -p ${freetype_build_dir} && cd ${freetype_build_dir} && SDK_PATH=${SDK_PATH} TOOLCHAIN_PATH=${CONFIG_TOOLCHAIN_PATH} TOOLCHAIN_PREFIX=${CONFIG_TOOLCHAIN_PREFIX} cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_PREFIX_PATH="${CMAKE_BINARY_DIR}/brotli_install/lib/pkgconfig" -DCMAKE_TOOLCHAIN_FILE=${freetype_toolchain_file} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${freetype_install_dir} -DFT_DISABLE_ZLIB=ON -DFT_DISABLE_PNG=ON -DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_BROTLI=ON ${freetype_src_path} && make -j`nproc` install)
++set(freetype_compile_cmd COMMAND mkdir -p ${freetype_build_dir} && cd ${freetype_build_dir} && SDK_PATH=${SDK_PATH} TOOLCHAIN_PATH=${CONFIG_TOOLCHAIN_PATH} TOOLCHAIN_PREFIX=${CONFIG_TOOLCHAIN_PREFIX} cmake -G Ninja -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_PREFIX_PATH="${CMAKE_BINARY_DIR}/brotli_install/lib/pkgconfig" -DCMAKE_TOOLCHAIN_FILE=${freetype_toolchain_file} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${freetype_install_dir} -DFT_DISABLE_ZLIB=ON -DFT_DISABLE_PNG=ON -DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_BROTLI=ON ${freetype_src_path} && ninja install)
+ 
+ 
+-add_custom_command(OUTPUT ${freetype_h_path}
++add_custom_command(OUTPUT ${freetype_h_path} ${freetype_lib_file}
+             ${freetype_compile_cmd}
+             COMMENT "Building freetype-${freetype_version_str} ..."
+             DEPENDS brotli
+--- a/components/3rd_party/brotli/CMakeLists.txt	2026-11-05 16:00:52.000000000 +0800
++++ b/components/3rd_party/brotli/CMakeLists.txt	2026-11-13 15:03:44.933134860 +0800
+@@ -103,10 +103,10 @@
+ else()
+     message(FATAL_ERROR "No brotli toolchain config for this board, please edit to add brotli support for this board")
+ endif()
+-set(brotli_compile_cmd COMMAND mkdir -p ${build_dir} && cd ${build_dir} && SDK_PATH=${SDK_PATH} TOOLCHAIN_PATH=${CONFIG_TOOLCHAIN_PATH} TOOLCHAIN_PREFIX=${CONFIG_TOOLCHAIN_PREFIX} cmake -DBROTLI_DISABLE_TESTS=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_TOOLCHAIN_FILE=${brotli_toolchain_file} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${install_dir} ${brotli_src_path} && make -j`nproc` install)
++set(brotli_compile_cmd COMMAND mkdir -p ${build_dir} && cd ${build_dir} && SDK_PATH=${SDK_PATH} TOOLCHAIN_PATH=${CONFIG_TOOLCHAIN_PATH} TOOLCHAIN_PREFIX=${CONFIG_TOOLCHAIN_PREFIX} cmake -G Ninja -DBROTLI_DISABLE_TESTS=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_TOOLCHAIN_FILE=${brotli_toolchain_file} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${install_dir} ${brotli_src_path} && ninja install)
+ 
+ 
+-add_custom_command(OUTPUT ${h_path}
++add_custom_command(OUTPUT ${h_path} ${lib_file}
+             ${brotli_compile_cmd}
+             COMMENT "Building brotli-${version_str} ..."
+         )

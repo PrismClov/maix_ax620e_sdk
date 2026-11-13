@@ -1,0 +1,313 @@
+--- a/src/app/app_main.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/app_main.c	2026-11-13 16:19:19.358517352 +0800
+@@ -359,7 +359,7 @@
+          * drm_flush 负责旋转复制到物理 dumb buffer。 */
+     }
+ 
+-#if !LV_USE_LINUX_DRM
++#if 0 /* MaixCAM2 port: logical size is provided by the port layer (640x480), do not override */
+     /* 非 DRM 后端（如 SDL）：首次创建时根据 g_app_landscape 设置分辨率。
+      * 旋转时（app_ui_recreate）由调用方先 set_rotation 再调用本函数。 */
+     if (disp && lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_0 && g_app_landscape) {
+--- a/src/app/common/ui_helpers.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/common/ui_helpers.c	2026-11-13 16:16:47.467037531 +0800
+@@ -155,12 +155,16 @@
+ /* ------------------------------------------------------------------ */
+ int ui_get_screen_width(void)
+ {
+-    /* RK3566 真实分辨率：竖屏 480x800，横屏 800x480 */
++    /* MaixCAM2 port: use the real LVGL display size instead of hardcoded 800x480 */
++    lv_display_t *d = lv_display_get_default();
++    if (d) return lv_display_get_horizontal_resolution(d);
+     return g_app_landscape ? 800 : 480;
+ }
+ 
+ int ui_get_screen_height(void)
+ {
++    lv_display_t *d = lv_display_get_default();
++    if (d) return lv_display_get_vertical_resolution(d);
+     return g_app_landscape ? 480 : 800;
+ }
+ 
+--- a/src/app/common/album_image_cache.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/common/album_image_cache.c	2026-11-13 21:48:46.424521368 +0800
+@@ -7,6 +7,7 @@
+  * 后续直接使用缓存图显示缩略图和全屏预览。
+  */
+ #include "album_image_cache.h"
++#include "thumb_gen.h"
+ #include "../app_main.h"
+ 
+ #include "lvgl/lvgl.h"
+@@ -367,6 +368,17 @@
+ /* ------------------------------------------------------------------ */
+ const char * album_image_get_path(const char *src_path, int cache_type)
+ {
++    if (cache_type == ALBUM_IMAGE_CACHE_THUMB && src_path) {
++        static char s_thumb[600];
++        const char *real = src_path;
++        if (src_path[0] == 'A' && src_path[1] == ':') real = src_path + 2;
++        char tp[520];
++        if (thumb_gen_query(real, tp, sizeof(tp))) {
++            snprintf(s_thumb, sizeof(s_thumb), "A:%s", tp);
++            return s_thumb;
++        }
++        thumb_gen_submit(real);
++    }
+     s_return_path[0] = '\0';
+     if (!src_path || !src_path[0]) return NULL;
+ 
+--- a/src/app/common/album_image_cache.h	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/common/album_image_cache.h	2026-11-13 21:48:46.426521393 +0800
+@@ -24,8 +24,8 @@
+ #define ALBUM_IMAGE_CACHE_PREVIEW 1
+ 
+ /* 最大边长 */
+-#define ALBUM_IMAGE_CACHE_THUMB_MAX   512
+-#define ALBUM_IMAGE_CACHE_PREVIEW_MAX 1280
++#define ALBUM_IMAGE_CACHE_THUMB_MAX   256
++#define ALBUM_IMAGE_CACHE_PREVIEW_MAX 800
+ 
+ /**
+  * @brief 返回可用于 LVGL 显示的图片路径。
+--- a/src/app/common/device_config.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/common/device_config.c	2026-11-13 18:21:03.874127825 +0800
+@@ -152,11 +152,11 @@
+ static camera_caps_t extract_camera_caps(const cJSON *root)
+ {
+     camera_caps_t caps = {
+-        .max_photo_width  = 1920,
+-        .max_photo_height = 1080,
++        .max_photo_width  = 640,
++        .max_photo_height = 480,
+         .max_video_width  = 1920,
+         .max_video_height = 1080,
+-        .max_video_fps    = 30,
++        .max_video_fps    = 25,
+     };
+     const cJSON *cc = cJSON_GetObjectItemCaseSensitive(root, "camera_capabilities");
+     if (!cc) return caps;  /* 缺失则使用 GC2093 默认值 */
+@@ -168,11 +168,11 @@
+     caps.max_video_fps    = extract_int(cc, "max_video_fps",    caps.max_video_fps);
+ 
+     /* 合法性校验：避免 0 或负值导致后续除零 */
+-    if (caps.max_photo_width  <= 0) caps.max_photo_width  = 1920;
+-    if (caps.max_photo_height <= 0) caps.max_photo_height = 1080;
++    if (caps.max_photo_width  <= 0) caps.max_photo_width  = 640;
++    if (caps.max_photo_height <= 0) caps.max_photo_height = 480;
+     if (caps.max_video_width  <= 0) caps.max_video_width  = 1920;
+     if (caps.max_video_height <= 0) caps.max_video_height = 1080;
+-    if (caps.max_video_fps    <= 0) caps.max_video_fps    = 30;
++    if (caps.max_video_fps    <= 0) caps.max_video_fps    = 25;
+ 
+     return caps;
+ }
+@@ -344,11 +344,11 @@
+     g_dc_result.camera_firmware_version  = g_dc_cache.camera_firmware_version;
+     /* 未加载时 camera_caps 保持默认值（extract_camera_caps 未被调用） */
+     if (!loaded) {
+-        g_dc_result.camera_caps.max_photo_width  = 1920;
+-        g_dc_result.camera_caps.max_photo_height = 1080;
++        g_dc_result.camera_caps.max_photo_width  = 640;
++        g_dc_result.camera_caps.max_photo_height = 480;
+         g_dc_result.camera_caps.max_video_width  = 1920;
+         g_dc_result.camera_caps.max_video_height = 1080;
+-        g_dc_result.camera_caps.max_video_fps    = 30;
++        g_dc_result.camera_caps.max_video_fps    = 25;
+     }
+     g_dc_result.loaded                   = loaded;
+ }
+--- a/src/app/camera/photo_saver.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/camera/photo_saver.c	2026-11-13 19:37:27.644636931 +0800
+@@ -14,6 +14,7 @@
+  *   UI 线程通过 photo_is_busy() 轮询状态，photo_async_done() 获取完成通知。
+  */
+ #include "photo_saver.h"
++#include "../common/thumb_gen.h"
+ 
+ #include "lvgl/lvgl.h"   /* LV_LOG_* 日志 */
+ 
+@@ -289,6 +290,8 @@
+ 
+     if (ret == 0) {
+         LV_LOG_USER("拍照保存成功: %s (%dx%d)", s_last_path, width, height);
++        /* P0-2: 缩略图在后台线程生成，拍照回调绝不做解码/缩放 */
++        thumb_gen_submit(s_last_path);
+     } else {
+         s_last_path[0] = '\0';
+     }
+--- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/pages/page_album.c	2026-11-13 22:12:31.859899631 +0800
+@@ -12,6 +12,42 @@
+  *   - 全屏查看时右滑关闭全屏
+  */
+ #include "page_album.h"
++#include "../common/thumb_gen.h"
++#include <stdint.h>
++#include <string.h>
++
++/* full screen async preview state */
++static lv_obj_t *g_full_img = NULL;
++static lv_timer_t *g_fs_poll = NULL;
++static int g_fs_gen = 0;
++static unsigned char *g_fs_buf = NULL;
++static lv_image_dsc_t g_fs_dsc;
++
++static void fs_poll_cb(lv_timer_t *t)
++{
++    (void)t;
++    char *buf = NULL; int w = 0, h = 0, gen = 0;
++    while (thumb_preview_poll(&buf, &w, &h, &gen)) {
++        if (gen != g_fs_gen) { free(buf); buf = NULL; continue; }
++        free(g_fs_buf);
++        g_fs_buf = (unsigned char *)buf;
++        memset(&g_fs_dsc, 0, sizeof(g_fs_dsc));
++        g_fs_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
++        g_fs_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
++        g_fs_dsc.header.w = w;
++        g_fs_dsc.header.h = h;
++        g_fs_dsc.data_size = (uint32_t)w * h * 2;
++        g_fs_dsc.data = g_fs_buf;
++        if (g_full_img) lv_image_set_src(g_full_img, &g_fs_dsc);
++        LV_LOG_USER("Album: fullscreen ready %dx%d gen=%d", w, h, gen);
++        break;
++    }
++}
++
++static void ensure_fs_poll_timer(void)
++{
++    if (!g_fs_poll) g_fs_poll = lv_timer_create(fs_poll_cb, 30, NULL);
++}
+ #include "../app_main.h"
+ #include "../common/ui_helpers.h"
+ #include "../common/app_i18n.h"
+@@ -50,7 +86,6 @@
+ static lv_obj_t *g_count_label;   /* 照片计数标签 */
+ static lv_obj_t *g_arrange_btn;   /* 排列切换按钮 */
+ static lv_obj_t *g_fullscreen;        /* 全屏查看 overlay */
+-static lv_obj_t *g_full_img;          /* 全屏图片显示 */
+ static lv_obj_t *g_video_placeholder; /* 全屏视频占位提示 */
+ static lv_obj_t *g_context_menu;      /* 长按弹出的二级菜单 overlay */
+ static int g_arrange_mode = 0;    /* 0=3列小图, 1=2列大图 */
+@@ -253,6 +288,8 @@
+ 
+     for (int i = 0; i < n; i++) {
+         scan_dir(s_scan_dirs[i], &g_photo_count);
++        /* P0-2: backfill 256px thumbs for every scanned dir in the background */
++        thumb_gen_sweep(s_scan_dirs[i]);
+         if (g_photo_count >= ALBUM_MAX_PHOTOS) break;
+     }
+     LV_LOG_USER("Album: found %d photos (scanned %d dirs, base=%s)",
+@@ -336,11 +373,15 @@
+     lv_obj_t *active = lv_tileview_get_tile_active(g_tv);
+ 
+     if (active == g_tile) {
++        /* 进入相册：暂停相机预览，释放 CPU 给相册解码/滚动 */
++        page_home_camera_suspend();
+         /* 进入相册：触发扫描刷新（首次进入时网格为空，此处填充） */
+         page_album_refresh();
+         return;
+     }
+ 
++    page_home_camera_resume();
++
+     /* 离开相册：关闭 overlay 和播放器 */
+     video_player_close();
+     fullscreen_close();
+@@ -419,18 +460,13 @@
+     if (g_video_placeholder) lv_obj_add_flag(g_video_placeholder, LV_OBJ_FLAG_HIDDEN);
+     if (g_full_img) lv_obj_remove_flag(g_full_img, LV_OBJ_FLAG_HIDDEN);
+     if (g_full_img) {
+-        /* 大图使用预览缓存，避免 LVGL 直接解码 20MP+ 原图导致 OOM */
+-        const char *preview_path = album_image_get_path(g_photos[idx], ALBUM_IMAGE_CACHE_PREVIEW);
+-        lv_image_header_t header;
+-        if (preview_path && album_image_get_info(preview_path, &header)) {
+-            lv_image_set_src(g_full_img, preview_path);
+-            LV_LOG_USER("Album: fullscreen load %dx%d: %s",
+-                        (int)header.w, (int)header.h, preview_path);
+-        } else {
+-            /* 无法加载时显示空白，避免设置无效 src 导致渲染崩溃 */
+-            lv_image_set_src(g_full_img, NULL);
+-            LV_LOG_WARN("Album: fullscreen skip unloadable photo %d", idx);
+-        }
++        /* P0: never let LVGL decode a JPEG for the full screen view.
++         * Ask the worker for an RGB565 copy and poll for it. */
++        lv_image_set_src(g_full_img, NULL);
++        g_fs_gen++;
++        thumb_preview_request(real_path, g_fs_gen);
++        ensure_fs_poll_timer();
++        LV_LOG_USER("Album: fullscreen request %d -> worker (gen %d)", idx, g_fs_gen);
+     }
+ 
+     lv_obj_remove_flag(g_fullscreen, LV_OBJ_FLAG_HIDDEN);
+@@ -1056,9 +1092,19 @@
+         return create_photo_cell(parent, idx, cell_size);
+     }
+ 
+-    /* 大图会通过 album_image_cache 自动降采样到安全尺寸；
+-     * 这里取缩略图缓存路径，再校验 LVGL 能否加载。 */
+-    const char *thumb_path = album_image_get_path(g_photos[idx], ALBUM_IMAGE_CACHE_THUMB);
++    /* P0: prefer the small thumbnail produced by the background worker.
++     * If it is not ready yet, render a placeholder immediately and let the
++     * lazy loading timer retry later - never decode the full JPEG on UI thread. */
++    static char s_thumb_buf[ALBUM_MAX_PHOTOS][300];
++    char real_thumb[300];
++    const char *thumb_path = NULL;
++    if (thumb_gen_query(real_path, real_thumb, sizeof(real_thumb))) {
++        snprintf(s_thumb_buf[idx], sizeof(s_thumb_buf[idx]), "A:%s", real_thumb);
++        thumb_path = s_thumb_buf[idx];
++    } else {
++        thumb_gen_submit(real_path);
++        return create_placeholder(parent, cell_size);
++    }
+     if (!thumb_path) {
+         LV_LOG_WARN("Album: thumbnail %d cache unavailable, use placeholder", idx);
+         return create_placeholder(parent, cell_size);
+@@ -1488,7 +1534,8 @@
+     lv_obj_add_event_cb(back_btn, on_back_to_home_cb, LV_EVENT_CLICKED, NULL);
+ 
+     lv_obj_t *storage_lbl = lv_label_create(toolbar);
+-    lv_obj_set_style_text_font(storage_lbl, ui_font_sym(), 0);
++    /* storage text contains CJK, montserrat has no CJK glyphs -> use CJK font */
++    lv_obj_set_style_text_font(storage_lbl, ui_font_cjk(), 0);
+     lv_obj_set_style_text_color(storage_lbl, lv_color_hex(COLOR_SECONDARY), 0);
+     update_storage_summary(storage_lbl);
+ 
+--- a/src/app/pages/page_home.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/pages/page_home.c	2026-11-13 17:31:57.231148111 +0800
+@@ -3918,3 +3918,18 @@
+         snprintf(buf, sz, "%s %s %s", mode_icon, g_res_opts[g_sel_res], STAB_OPTS[g_sel_stab]);
+     }
+ }
++
++/* MaixCAM2 port: pause preview while another page (album) is visible */
++void page_home_camera_suspend(void)
++{
++    LV_LOG_USER("port: suspend camera preview");
++    home_camera_stop();
++}
++
++void page_home_camera_resume(void)
++{
++    if (g_camera_view && !g_camera) {
++        LV_LOG_USER("port: resume camera preview");
++        home_camera_start(g_camera_view);
++    }
++}
+--- a/src/app/settings/settings_storage.c	2026-10-30 19:06:53.000000000 +0800
++++ b/src/app/settings/settings_storage.c	2026-11-13 16:25:03.884987414 +0800
+@@ -92,10 +92,11 @@
+ static const char * get_internal_base_path(void)
+ {
+     board_type_t board = board_detect();
+-    if (board == BOARD_K230) {
+-        return "/root";  /* K230 root 家目录：DCIM/photos 落在 /root/DCIM */
++    if (board == BOARD_K230 || board == BOARD_UNKNOWN) {
++        /* MaixCAM2 port: use /root as internal storage (no /userdata partition) */
++        return "/root";
+     }
+-    return "/userdata";  /* RK3566 及未知板子使用 /userdata */
++    return "/userdata";  /* RK3566 */
+ }
+ 
+ /* 外部模块获取当前保存路径 */
