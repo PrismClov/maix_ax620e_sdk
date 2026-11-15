@@ -223,24 +223,30 @@ static void generate_preview(const char *src, int gen)
     int comp = decode_jpeg(src, &rgb, &w, &h);
     if (comp <= 0 || !rgb) { fprintf(stderr, "[thumb] preview decode failed: %s\n", src); return; }
 
-    int tw, th;
-    if ((int64_t)w * 480 > (int64_t)h * 640) { tw = 640; th = h * 640 / w; }
-    else { th = 480; tw = w * 480 / h; }
-    if (tw < 1) tw = 1;
-    if (th < 1) th = 1;
+    /* 全屏保留原始分辨率（上限 2560x1440），由 LVGL 缩放到屏幕；
+     * 相当于在屏幕端做超采样，比先降到 640 再放大会更清晰。 */
+    int tw = w, th = h;
+    if ((int64_t)w * h > (int64_t)2560 * 1440) {
+        tw = 2560;
+        th = (int)((int64_t)h * 2560 / w);
+        if (th > 1440) { th = 1440; tw = (int)((int64_t)w * 1440 / h); }
+    }
 
     uint16_t *out = (uint16_t *)malloc((size_t)tw * th * 2);
     if (!out) { free(rgb); return; }
+
     for (int y = 0; y < th; y++) {
-        int sy = y * h / th;
-        const unsigned char *srow = rgb + (size_t)sy * w * comp;
+        int sy = (th == h) ? y : y * h / th;
+        const unsigned char *row = rgb + (size_t)sy * w * comp;
+        uint16_t *drow = out + (size_t)y * tw;
         for (int x = 0; x < tw; x++) {
-            const unsigned char *p = srow + (size_t)(x * w / tw) * comp;
-            if (comp == 3) out[(size_t)y * tw + x] = (uint16_t)(((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3));
-            else out[(size_t)y * tw + x] = (uint16_t)(((p[0] & 0xF8) << 8) | ((p[0] & 0xFC) << 3) | (p[0] >> 3));
+            const unsigned char *p = row + (size_t)((tw == w) ? x : x * w / tw) * comp;
+            if (comp == 3) drow[x] = (uint16_t)(((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3));
+            else           drow[x] = (uint16_t)(((p[0] & 0xF8) << 8) | ((p[0] & 0xFC) << 3) | (p[0] >> 3));
         }
     }
     free(rgb);
+    fprintf(stderr, "[thumb] preview %dx%d -> %dx%d gen=%d\n", w, h, tw, th, gen);
     push_preview((unsigned char *)out, tw, th, gen);
 }
 
