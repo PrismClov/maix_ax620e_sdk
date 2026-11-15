@@ -187,8 +187,8 @@
 +    return 0;
 +}
 --- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_album.c	2026-11-16 01:15:03.139956070 +0800
-@@ -12,6 +12,42 @@
++++ b/src/app/pages/page_album.c	2026-11-16 01:26:50.236502160 +0800
+@@ -12,6 +12,51 @@
   *   - 全屏查看时右滑关闭全屏
   */
  #include "page_album.h"
@@ -216,9 +216,18 @@
 +        g_fs_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
 +        g_fs_dsc.header.w = w;
 +        g_fs_dsc.header.h = h;
++        g_fs_dsc.header.stride = (uint32_t)w * 2;
 +        g_fs_dsc.data_size = (uint32_t)w * h * 2;
 +        g_fs_dsc.data = g_fs_buf;
-+        if (g_full_img) lv_image_set_src(g_full_img, &g_fs_dsc);
++        if (g_full_img) {
++            lv_image_set_src(g_full_img, &g_fs_dsc);
++            /* 按屏幕尺寸等比缩放，避免大图只显示左上角一小块 */
++            int sw = ui_get_screen_width(), sh = ui_get_screen_height();
++            uint32_t sx = (uint32_t)((int64_t)sw * 256 / (w > 0 ? w : 1));
++            uint32_t sy = (uint32_t)((int64_t)sh * 256 / (h > 0 ? h : 1));
++            lv_image_set_scale(g_full_img, LV_MIN(sx, sy));
++            LV_LOG_USER("Album: fullscreen %dx%d scaled to %d/256", w, h, (int)LV_MIN(sx, sy));
++        }
 +        LV_LOG_USER("Album: fullscreen ready %dx%d gen=%d", w, h, gen);
 +        break;
 +    }
@@ -231,7 +240,7 @@
  #include "../app_main.h"
  #include "../common/ui_helpers.h"
  #include "../common/app_i18n.h"
-@@ -50,7 +86,6 @@
+@@ -50,7 +95,6 @@
  static lv_obj_t *g_count_label;   /* 照片计数标签 */
  static lv_obj_t *g_arrange_btn;   /* 排列切换按钮 */
  static lv_obj_t *g_fullscreen;        /* 全屏查看 overlay */
@@ -239,7 +248,7 @@
  static lv_obj_t *g_video_placeholder; /* 全屏视频占位提示 */
  static lv_obj_t *g_context_menu;      /* 长按弹出的二级菜单 overlay */
  static int g_arrange_mode = 0;    /* 0=3列小图, 1=2列大图 */
-@@ -206,6 +241,31 @@
+@@ -206,6 +250,31 @@
  }
  
  /* 对外接口：从根目录开始扫描（depth=0） */
@@ -271,7 +280,7 @@
  static void scan_dir(const char *dir, int *count)
  {
      scan_dir_impl(dir, count, 0);
-@@ -253,9 +313,12 @@
+@@ -253,9 +322,12 @@
  
      for (int i = 0; i < n; i++) {
          scan_dir(s_scan_dirs[i], &g_photo_count);
@@ -285,7 +294,7 @@
                  g_photo_count, n, base ? base : "NULL");
      // #region debug-point B:album
      dbg_log("B", "page_album.c:refresh_photo_list", "done");
-@@ -336,11 +399,15 @@
+@@ -336,11 +408,15 @@
      lv_obj_t *active = lv_tileview_get_tile_active(g_tv);
  
      if (active == g_tile) {
@@ -301,7 +310,7 @@
      /* 离开相册：关闭 overlay 和播放器 */
      video_player_close();
      fullscreen_close();
-@@ -419,18 +486,13 @@
+@@ -419,18 +495,13 @@
      if (g_video_placeholder) lv_obj_add_flag(g_video_placeholder, LV_OBJ_FLAG_HIDDEN);
      if (g_full_img) lv_obj_remove_flag(g_full_img, LV_OBJ_FLAG_HIDDEN);
      if (g_full_img) {
@@ -327,7 +336,7 @@
      }
  
      lv_obj_remove_flag(g_fullscreen, LV_OBJ_FLAG_HIDDEN);
-@@ -1056,9 +1118,19 @@
+@@ -1056,9 +1127,19 @@
          return create_photo_cell(parent, idx, cell_size);
      }
  
@@ -350,7 +359,7 @@
      if (!thumb_path) {
          LV_LOG_WARN("Album: thumbnail %d cache unavailable, use placeholder", idx);
          return create_placeholder(parent, cell_size);
-@@ -1488,7 +1560,8 @@
+@@ -1488,7 +1569,8 @@
      lv_obj_add_event_cb(back_btn, on_back_to_home_cb, LV_EVENT_CLICKED, NULL);
  
      lv_obj_t *storage_lbl = lv_label_create(toolbar);
@@ -360,7 +369,7 @@
      lv_obj_set_style_text_color(storage_lbl, lv_color_hex(COLOR_SECONDARY), 0);
      update_storage_summary(storage_lbl);
  
-@@ -1543,6 +1616,21 @@
+@@ -1543,6 +1625,21 @@
      return g_tile;
  }
  
@@ -382,7 +391,7 @@
  void page_album_refresh(void)
  {
      /* 退出相册时可能停留在全屏查看、视频播放或长按菜单界面，下次进入应回到相册主页面。
-@@ -1556,10 +1644,17 @@
+@@ -1556,10 +1653,17 @@
      }
      g_context_idx = -1;
  
