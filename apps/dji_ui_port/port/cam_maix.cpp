@@ -250,6 +250,7 @@ extern "C" int maixcam2_capture_still_jpeg(const char *path, int quality)
 {
     if (!path) return -1;
     uint64_t t0 = time::ticks_ms();
+    if (getenv("DJI_STILL_DELAY")) time::sleep_ms(atoi(getenv("DJI_STILL_DELAY")));
     try {
         int cw = getenv("DJI_STILL_W") ? atoi(getenv("DJI_STILL_W")) : 2560;
         int ch = getenv("DJI_STILL_H") ? atoi(getenv("DJI_STILL_H")) : 1440;

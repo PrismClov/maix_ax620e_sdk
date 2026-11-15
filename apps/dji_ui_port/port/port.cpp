@@ -228,6 +228,19 @@ extern "C" int maix_port_init(int rotate)
     /* 调试用：只要 /tmp/shot 存在，就把当前合成帧存成 JPEG（/tmp/shot.jpg），
      * 便于远程排查 UI 显示问题，无需人工看屏幕 */
     lv_timer_create([](lv_timer_t *) {
+        if (access("/tmp/cmd", F_OK) == 0) {
+            char buf[64] = {0};
+            FILE *f = fopen("/tmp/cmd", "r");
+            if (f) { if (fgets(buf, sizeof(buf), f)) {} fclose(f); }
+            unlink("/tmp/cmd");
+            if (strncmp(buf, "full", 4) == 0) {
+                extern void page_home_debug_goto_album(void);
+                extern void page_album_debug_open(int idx);
+                page_home_debug_goto_album();
+                page_album_debug_open(atoi(buf + 4));
+                log::info("debug: opened fullscreen %d", atoi(buf + 4));
+            }
+        }
         if (access("/tmp/shot", F_OK) != 0) return;
         unlink("/tmp/shot");
         if (!g_img) return;
