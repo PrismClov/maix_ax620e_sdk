@@ -118,7 +118,7 @@
      g_dc_result.loaded                   = loaded;
  }
 --- a/src/app/camera/photo_saver.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/camera/photo_saver.c	2026-11-16 00:59:55.902206175 +0800
++++ b/src/app/camera/photo_saver.c	2026-11-16 01:09:19.423908158 +0800
 @@ -14,6 +14,8 @@
   *   UI 线程通过 photo_is_busy() 轮询状态，photo_async_done() 获取完成通知。
   */
@@ -165,6 +165,27 @@
      /* 步骤 1：中心裁剪到目标画幅 */
      uint16_t *cropped = NULL;
      int crop_w = 0, crop_h = 0;
+@@ -600,3 +625,20 @@
+     }
+     return 0;
+ }
++
++
++/* MaixCAM2: 以传感器 2K 分辨率抓取一张照片到 dir，成功返回 0 并更新 s_last_path。 */
++int photo_capture_hires(const char *dir, int quality)
++{
++    if (!dir) return -1;
++    if (mkdir_p(dir) != 0) return -1;
++    char path[256];
++    make_filename(path, sizeof(path), dir, "jpg");
++    int r = maixcam2_capture_still_jpeg(path, quality);
++    if (r != 0) return r;
++    strncpy(s_last_path, path, sizeof(s_last_path) - 1);
++    s_last_path[sizeof(s_last_path) - 1] = 0;
++    LV_LOG_USER("2K 拍照成功: %s", s_last_path);
++    thumb_gen_submit(s_last_path);
++    return 0;
++}
 --- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
 +++ b/src/app/pages/page_album.c	2026-11-13 22:31:56.027525052 +0800
 @@ -12,6 +12,42 @@
@@ -345,16 +366,44 @@
  
  void page_album_destroy(void)
 --- a/src/app/pages/page_home.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_home.c	2026-11-16 00:57:46.070392927 +0800
-@@ -15,6 +15,7 @@
++++ b/src/app/pages/page_home.c	2026-11-16 01:09:19.422909577 +0800
+@@ -15,6 +15,9 @@
   *   - 右侧变焦滑块面板
   */
  #include "page_home.h"
 +#include "../common/board_battery.h"
++extern int photo_capture_hires(const char *dir, int quality);
++extern int maixcam2_capture_still_jpeg(const char *path, int quality);
  #include "page_album.h"               /* 相册刷新：拍照后进入相册需重新扫描 */
  #include "page_quick.h"               /* 上滑菜单：模式切换后需刷新快捷参数页 */
  #include "../app_main.h"
-@@ -3050,6 +3051,48 @@
+@@ -1625,6 +1628,25 @@
+     const char *base = settings_storage_get_path();
+     snprintf(g_photo_save_dir, sizeof(g_photo_save_dir), "%s/DCIM", base);
+ 
++    /* MaixCAM2: 真正的 2K 拍照。
++     * 预览相机开着时 2560x1440 通道无法重新配置（VI 通道只缩不放），
++     * 所以这里先停预览 -> 以 2560x1440 YVU420SP 抓一帧 -> 重开预览。
++     * 失败则回退到下面的预览帧路径（640x480）。 */
++    {
++        static int hires_disabled = 0;
++        if (!hires_disabled && !g_burst_active) {
++            home_camera_stop();
++            int hr = photo_capture_hires(g_photo_save_dir, 95);
++            if (g_camera_view) home_camera_start(g_camera_view);
++            if (hr == 0) {
++                home_show_toast(tr("已保存 2K 照片", "2K photo saved"));
++                return;
++            }
++            hires_disabled = 1;
++            LV_LOG_WARN("2K 拍照失败(%d)，回退到预览帧路径", hr);
++        }
++    }
++
+     /* 请求 worker 线程做全分辨率拍照快照：worker 在下一帧转换时，
+      * 对当前帧做"仅旋转不降采样"转换到 photo_buf（原始分辨率，如 1920x1080）。
+      * 转换完成后通过 camera_preview_is_photo_ready 通知 UI 线程，
+@@ -3050,6 +3072,48 @@
  /* ================================================================== */
  /* 主页创建                                                            */
  /* ================================================================== */
@@ -403,7 +452,7 @@
  static lv_obj_t *make_top_bar(lv_obj_t *parent)
  {
      lv_obj_t *bar = lv_obj_create(parent);
-@@ -3116,11 +3159,12 @@
+@@ -3116,11 +3180,12 @@
      lv_obj_set_style_bg_opa(gap, LV_OPA_TRANSP, 0);
      lv_obj_remove_flag(gap, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
  
@@ -421,7 +470,7 @@
  
      return bar;
  }
-@@ -3918,3 +3962,18 @@
+@@ -3918,3 +3983,18 @@
          snprintf(buf, sz, "%s %s %s", mode_icon, g_res_opts[g_sel_res], STAB_OPTS[g_sel_stab]);
      }
  }
