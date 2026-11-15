@@ -225,6 +225,18 @@ extern "C" int maix_port_init(int rotate)
     lv_display_set_default(disp);
     if (rotate) lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
 
+    /* 调试用：只要 /tmp/shot 存在，就把当前合成帧存成 JPEG（/tmp/shot.jpg），
+     * 便于远程排查 UI 显示问题，无需人工看屏幕 */
+    lv_timer_create([](lv_timer_t *) {
+        if (access("/tmp/shot", F_OK) != 0) return;
+        unlink("/tmp/shot");
+        if (!g_img) return;
+        try {
+            err::Err e = g_img->save("/tmp/shot.jpg", 90);
+            log::info("screenshot: %s err=%d", "/tmp/shot.jpg", (int)e);
+        } catch (...) {}
+    }, 300, nullptr);
+
     /* P0-2: start the thumbnail worker and backfill existing photos once */
     thumb_gen_start();
     thumb_gen_sweep("/root/photos");
@@ -237,6 +249,12 @@ extern "C" int maix_port_init(int rotate)
     }
 
     return 0;
+}
+
+extern "C" int maix_port_screenshot(const char *path)
+{
+    if (!g_img || !path) return -1;
+    try { return (int)g_img->save(path, 90); } catch (...) { return -2; }
 }
 
 extern "C" int maix_port_width(void) { return g_w; }

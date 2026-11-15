@@ -187,7 +187,7 @@
 +    return 0;
 +}
 --- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_album.c	2026-11-16 03:01:34.258936400 +0800
++++ b/src/app/pages/page_album.c	2026-11-16 03:01:44.881669190 +0800
 @@ -12,6 +12,49 @@
   *   - 全屏查看时右滑关闭全屏
   */
@@ -452,8 +452,18 @@
  }
  
  void page_album_destroy(void)
+@@ -1598,3 +1708,9 @@
+     g_arrange_btn  = NULL;
+     g_photo_count  = 0;
+ }
++
++/* 调试：直接打开第 idx 张的全屏视图 */
++void page_album_debug_open(int idx)
++{
++    open_fullscreen(idx);
++}
 --- a/src/app/pages/page_home.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_home.c	2026-11-16 03:01:34.257936425 +0800
++++ b/src/app/pages/page_home.c	2026-11-16 03:01:44.879669241 +0800
 @@ -15,6 +15,9 @@
   *   - 右侧变焦滑块面板
   */
@@ -557,7 +567,7 @@
  
      return bar;
  }
-@@ -3918,3 +3983,18 @@
+@@ -3918,3 +3983,24 @@
          snprintf(buf, sz, "%s %s %s", mode_icon, g_res_opts[g_sel_res], STAB_OPTS[g_sel_stab]);
      }
  }
@@ -575,6 +585,12 @@
 +        LV_LOG_USER("port: resume camera preview");
 +        home_camera_start(g_camera_view);
 +    }
++}
++
++/* 调试：切到相册页（复用 on_album_click 的导航逻辑） */
++void page_home_debug_goto_album(void)
++{
++    on_album_click(NULL);
 +}
 --- a/src/app/settings/settings_storage.c	2026-10-30 19:06:53.000000000 +0800
 +++ b/src/app/settings/settings_storage.c	2026-11-13 16:25:03.884987414 +0800

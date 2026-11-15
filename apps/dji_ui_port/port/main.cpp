@@ -13,6 +13,9 @@ extern "C" {
 
 extern "C" int maixcam2_capture_still_jpeg(const char *path, int quality);
 extern "C" int maix_port_init(int rotate);
+extern "C" int maix_port_screenshot(const char *path);
+extern "C" void page_home_debug_goto_album(void);
+extern "C" void page_album_debug_open(int idx);
 extern "C" int maix_port_width(void);
 extern "C" int maix_port_height(void);
 extern "C" void app_ui_create(void);
@@ -78,11 +81,21 @@ int main(int argc, char *argv[])
     }
     app_ui_create();
 
+    const bool dbg_album = getenv("DJI_DEBUG_ALBUM") != nullptr;
+    uint64_t dbg_t0 = (uint64_t)maix::time::ticks_ms();
+    int dbg_stage = 0;
     /* frame-time statistics: p50/p95/p99/max of lv_timer_handler() */
     static uint32_t samples[600];
     static int n = 0;
     static uint32_t win_start = (uint32_t)maix::time::ticks_ms();
     while (1) {
+        if (dbg_album) {
+            uint64_t el = (uint64_t)maix::time::ticks_ms() - dbg_t0;
+            if (dbg_stage == 0 && el > 3000) { page_home_debug_goto_album(); dbg_stage = 1; }
+            else if (dbg_stage == 1 && el > 7000) { maix_port_screenshot("/tmp/dbg_album.jpg"); dbg_stage = 2; }
+            else if (dbg_stage == 2 && el > 9000) { page_album_debug_open(0); dbg_stage = 3; }
+            else if (dbg_stage == 3 && el > 13000) { maix_port_screenshot("/tmp/dbg_full.jpg"); dbg_stage = 4; }
+        }
         uint32_t t0 = (uint32_t)maix::time::ticks_ms();
         lv_timer_handler();
         uint32_t dt = (uint32_t)maix::time::ticks_ms() - t0;
