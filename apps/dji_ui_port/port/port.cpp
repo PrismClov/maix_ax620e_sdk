@@ -34,6 +34,8 @@ using namespace maix;
 
 static display::Display *g_disp = nullptr;
 static image::Image *g_img = nullptr;
+static int g_dbg_full_idx = -1;
+static uint32_t g_dbg_full_at = 0;
 static int g_w = 0, g_h = 0;
 
 static int g_touch_fd = -1;
@@ -237,9 +239,18 @@ extern "C" int maix_port_init(int rotate)
                 extern void page_home_debug_goto_album(void);
                 extern void page_album_debug_open(int idx);
                 page_home_debug_goto_album();
-                page_album_debug_open(atoi(buf + 4));
-                log::info("debug: opened fullscreen %d", atoi(buf + 4));
+                /* 切到相册会触发 page_album_refresh()，它会关闭全屏 overlay，
+                 * 所以延后 1.2s 再打开全屏 */
+                g_dbg_full_idx = atoi(buf + 4);
+                g_dbg_full_at = (uint32_t)time::ticks_ms() + 1200;
+                log::info("debug: goto album, will open fullscreen %d in 1.2s", g_dbg_full_idx);
             }
+        }
+        if (g_dbg_full_idx >= 0 && (int32_t)((uint32_t)time::ticks_ms() - g_dbg_full_at) >= 0) {
+            extern void page_album_debug_open(int idx);
+            page_album_debug_open(g_dbg_full_idx);
+            log::info("debug: opened fullscreen %d", g_dbg_full_idx);
+            g_dbg_full_idx = -1;
         }
         if (access("/tmp/shot", F_OK) != 0) return;
         unlink("/tmp/shot");
