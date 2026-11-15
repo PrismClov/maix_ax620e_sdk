@@ -1,0 +1,16 @@
+[Unit]
+Description=MaixCAM2 action camera (LVGL)
+After=multi-user.target
+Conflicts=launcher.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dji_ui
+Environment=LD_LIBRARY_PATH=/opt/dji_ui/lib:/opt/lib
+TimeoutStartSec=0
+ExecStart=/opt/dji_ui/start.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
