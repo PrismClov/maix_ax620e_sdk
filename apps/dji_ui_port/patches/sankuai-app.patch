@@ -187,7 +187,7 @@
 +    return 0;
 +}
 --- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_album.c	2026-11-13 22:31:56.027525052 +0800
++++ b/src/app/pages/page_album.c	2026-11-16 01:15:03.139956070 +0800
 @@ -12,6 +12,42 @@
   *   - 全屏查看时右滑关闭全屏
   */
@@ -239,7 +239,39 @@
  static lv_obj_t *g_video_placeholder; /* 全屏视频占位提示 */
  static lv_obj_t *g_context_menu;      /* 长按弹出的二级菜单 overlay */
  static int g_arrange_mode = 0;    /* 0=3列小图, 1=2列大图 */
-@@ -253,6 +288,8 @@
+@@ -206,6 +241,31 @@
+ }
+ 
+ /* 对外接口：从根目录开始扫描（depth=0） */
++/* mtime lookup, path may be "A:/path" */
++static time_t photo_mtime(const char *p)
++{
++    if (!p) return 0;
++    if (p[0] == 'A' && p[1] == ':') p += 2;
++    struct stat st;
++    return (stat(p, &st) == 0) ? st.st_mtime : 0;
++}
++
++static int photo_cmp_newest_first(const void *a, const void *b)
++{
++    time_t ta = photo_mtime((const char *)a);
++    time_t tb = photo_mtime((const char *)b);
++    if (ta == tb) return strcmp((const char *)a, (const char *)b) * -1;
++    return (ta < tb) ? 1 : -1;   /* newest first */
++}
++
++/* 按修改时间倒序排列（最新的在最前） */
++static void sort_photos_newest_first(int count)
++{
++    if (count <= 1) return;
++    /* g_photos 是二维数组，元素宽度 ALBUM_PATH_LEN，可直接 qsort */
++    qsort(g_photos, (size_t)count, ALBUM_PATH_LEN, photo_cmp_newest_first);
++}
++
+ static void scan_dir(const char *dir, int *count)
+ {
+     scan_dir_impl(dir, count, 0);
+@@ -253,9 +313,12 @@
  
      for (int i = 0; i < n; i++) {
          scan_dir(s_scan_dirs[i], &g_photo_count);
@@ -247,8 +279,13 @@
 +        thumb_gen_sweep(s_scan_dirs[i]);
          if (g_photo_count >= ALBUM_MAX_PHOTOS) break;
      }
-     LV_LOG_USER("Album: found %d photos (scanned %d dirs, base=%s)",
-@@ -336,11 +373,15 @@
+-    LV_LOG_USER("Album: found %d photos (scanned %d dirs, base=%s)",
++    sort_photos_newest_first(g_photo_count);
++    LV_LOG_USER("Album: found %d photos (scanned %d dirs, base=%s, sorted newest first)",
+                 g_photo_count, n, base ? base : "NULL");
+     // #region debug-point B:album
+     dbg_log("B", "page_album.c:refresh_photo_list", "done");
+@@ -336,11 +399,15 @@
      lv_obj_t *active = lv_tileview_get_tile_active(g_tv);
  
      if (active == g_tile) {
@@ -264,7 +301,7 @@
      /* 离开相册：关闭 overlay 和播放器 */
      video_player_close();
      fullscreen_close();
-@@ -419,18 +460,13 @@
+@@ -419,18 +486,13 @@
      if (g_video_placeholder) lv_obj_add_flag(g_video_placeholder, LV_OBJ_FLAG_HIDDEN);
      if (g_full_img) lv_obj_remove_flag(g_full_img, LV_OBJ_FLAG_HIDDEN);
      if (g_full_img) {
@@ -290,7 +327,7 @@
      }
  
      lv_obj_remove_flag(g_fullscreen, LV_OBJ_FLAG_HIDDEN);
-@@ -1056,9 +1092,19 @@
+@@ -1056,9 +1118,19 @@
          return create_photo_cell(parent, idx, cell_size);
      }
  
@@ -313,7 +350,7 @@
      if (!thumb_path) {
          LV_LOG_WARN("Album: thumbnail %d cache unavailable, use placeholder", idx);
          return create_placeholder(parent, cell_size);
-@@ -1488,7 +1534,8 @@
+@@ -1488,7 +1560,8 @@
      lv_obj_add_event_cb(back_btn, on_back_to_home_cb, LV_EVENT_CLICKED, NULL);
  
      lv_obj_t *storage_lbl = lv_label_create(toolbar);
@@ -323,7 +360,7 @@
      lv_obj_set_style_text_color(storage_lbl, lv_color_hex(COLOR_SECONDARY), 0);
      update_storage_summary(storage_lbl);
  
-@@ -1543,6 +1590,21 @@
+@@ -1543,6 +1616,21 @@
      return g_tile;
  }
  
@@ -345,7 +382,7 @@
  void page_album_refresh(void)
  {
      /* 退出相册时可能停留在全屏查看、视频播放或长按菜单界面，下次进入应回到相册主页面。
-@@ -1556,10 +1618,17 @@
+@@ -1556,10 +1644,17 @@
      }
      g_context_idx = -1;
  
