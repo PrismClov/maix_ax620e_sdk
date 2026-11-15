@@ -77,6 +77,7 @@ int main(int argc, char *argv[])
         return -1;
     }
     app_ui_create();
+
     /* frame-time statistics: p50/p95/p99/max of lv_timer_handler() */
     static uint32_t samples[600];
     static int n = 0;
