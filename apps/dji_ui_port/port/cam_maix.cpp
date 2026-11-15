@@ -257,7 +257,16 @@ extern "C" int maixcam2_capture_still_jpeg(const char *path, int quality)
         int cfps = getenv("DJI_STILL_FPS") ? atoi(getenv("DJI_STILL_FPS")) : -1;
         camera::Camera cam(cw, ch, use_rgb ? image::FMT_RGB888 : image::FMT_YVU420SP, nullptr, cfps);
         uint64_t t1 = time::ticks_ms();
-        image::Image *yuv = cam.read(true, 3000);
+        /* 切换 sensor 模式后 AE/AWB 从默认值重新收敛，首帧必然过曝/偏色。
+         * 丢掉前几帧，只保留收敛后的最后一帧。 */
+        image::Image *yuv = nullptr;
+        const int warmup = 12;
+        for (int i = 0; i < warmup; i++) {
+            image::Image *f = cam.read(true, 3000);
+            if (!f) break;
+            if (yuv) delete yuv;
+            yuv = f;
+        }
         uint64_t t2 = time::ticks_ms();
         if (!yuv) {
             log::warn("still: read timeout");
