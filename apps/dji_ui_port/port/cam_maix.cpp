@@ -12,6 +12,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <atomic>
+#include <thread>
 #include <vector>
 #include <limits.h>
 #include <signal.h>
@@ -27,6 +29,7 @@ using namespace maix;
 
 struct camera_hal {
     camera::Camera *cam = nullptr;
+    camera::Camera *still_cam = nullptr;
     int w = 0, h = 0, fps = 30;
     image::Image *cur = nullptr;
     uint16_t *rgb565_buf = nullptr;
@@ -57,13 +60,24 @@ extern "C" camera_hal_t *camera_open_default(int width, int height, int fps)
     h->w = h->cam->width();
     h->h = h->cam->height();
     h->fps = fps > 0 ? fps : 30;
-    log::info("camera_hal: opened %dx%d", h->w, h->h);
+    try {
+        /* Keep a full-resolution YVU channel alive alongside preview. AX VI
+         * supports both outputs from the same sensor; this avoids the
+         * stop-preview / reconfigure / restart-preview stall on every shot. */
+        h->still_cam = h->cam->add_channel(2560, 1440, image::FMT_YVU420SP);
+    } catch (std::exception &e) {
+        log::warn("camera_hal: 2K live snapshot channel unavailable: %s", e.what());
+        h->still_cam = nullptr;
+    }
+    log::info("camera_hal: opened %dx%d, live still=%s", h->w, h->h,
+              h->still_cam ? "2560x1440 YVU420SP" : "disabled");
     return h;
 }
 
 extern "C" void camera_close(camera_hal_t *cam)
 {
     if (!cam) return;
+    delete cam->still_cam;
     delete cam->cam;
     free(cam->rgb565_buf);
     free(cam);
@@ -415,4 +429,57 @@ extern "C" int maixcam2_capture_still_jpeg_isolated(const char *path, int qualit
     waitpid(pid, &status, 0);
     log::warn("still(helper): timeout");
     return -6;
+}
+
+static std::atomic_bool g_live_still_busy{false};
+
+typedef void (*live_still_done_cb_t)(const char *path, int result, void *ctx);
+
+/* Capture one already-converged frame from the persistent 2K channel, then
+ * encode it on a worker thread. Preview continues throughout the capture. */
+extern "C" int maixcam2_capture_still_jpeg_from_preview_async(
+    camera_hal_t *h, const char *path, int quality,
+    live_still_done_cb_t done_cb, void *ctx)
+{
+    if (!h || !path || !h->still_cam) return -1;
+    bool expected = false;
+    if (!g_live_still_busy.compare_exchange_strong(expected, true)) return -2;
+
+    image::Image *yuv = nullptr;
+    try {
+        yuv = h->still_cam->read(true, 1000);
+    } catch (std::exception &e) {
+        log::warn("still(live): read failed: %s", e.what());
+    }
+    if (!yuv) {
+        g_live_still_busy.store(false);
+        return -3;
+    }
+
+    std::string path_copy(path);
+    std::thread([yuv, path_copy, quality, done_cb, ctx]() {
+        int ret = -1;
+        const int w = yuv->width(), h = yuv->height();
+        uint64_t t0 = time::ticks_ms();
+        try {
+            image::Image *rgb = new image::Image(w, h, image::FMT_RGB888);
+            if (!rgb) {
+                ret = -3;
+            } else {
+                nv21_to_rgb888((const uint8_t *)yuv->data(), w, h,
+                               (uint8_t *)rgb->data());
+                err::Err e = rgb->save(path_copy.c_str(), quality);
+                ret = e == err::ERR_NONE ? 0 : -4;
+                delete rgb;
+            }
+        } catch (std::exception &e) {
+            log::warn("still(live): save failed: %s", e.what());
+        }
+        delete yuv;
+        log::info("still(live): %dx%d result=%d save=%llums",
+                  w, h, ret, (unsigned long long)(time::ticks_ms() - t0));
+        g_live_still_busy.store(false);
+        if (done_cb) done_cb(path_copy.c_str(), ret, ctx);
+    }).detach();
+    return 0;
 }

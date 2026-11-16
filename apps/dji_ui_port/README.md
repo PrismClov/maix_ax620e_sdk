@@ -35,11 +35,10 @@ apps/dji_ui_port/
 
 - 1080p 在 512MB 可用内存的机器上会让 ISP 初始化卡死，HAL 层钳制到 640×480
 - 帧统一转 RGB565 交给上游 preview 线程（其内部仍做 crop/rotate/scale）
-- 2K 拍照先停止预览，再由独立子进程执行 `maixcam2_capture_still_jpeg()`。
-  MaixCDK/AX VI 会在预览 close 后保留进程级窗口状态；在干净进程中抓帧可避免
-  2K 输出继承预览 ROI，只保存到镜头视野的一小块
-- 抓帧至少丢弃 12 帧，并依据 Y 平面平均亮度连续稳定 3 帧后再保存，避免
-  sensor mode 切换时 AE 尚未收敛导致大面积过曝
+- 相机启动时通过 `add_channel()` 常驻一路 `2560×1440 YVU420SP` 拍照通道，
+  与 640×480 预览共享同一 sensor；快门只需取最新 2K 帧，不再停止预览或重开 sensor
+- 2K 帧在后台线程转换 RGB888 并编码 JPEG，UI 线程和实时预览不会等待保存完成
+- 独立抓帧和亮度收敛逻辑保留为 `DJI_STILL_TEST` / `DJI_STILL_ISOLATED_TEST` 调试入口
 
 ### 3. 相册：把解码搬离 UI 线程
 

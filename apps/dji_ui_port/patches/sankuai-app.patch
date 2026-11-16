@@ -1,5 +1,5 @@
---- a/src/app/app_main.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/app_main.c	2026-11-13 16:19:19.358517352 +0800
+--- a/src/app/app_main.c
++++ b/src/app/app_main.c
 @@ -359,7 +359,7 @@
           * drm_flush 负责旋转复制到物理 dumb buffer。 */
      }
@@ -9,8 +9,8 @@
      /* 非 DRM 后端（如 SDL）：首次创建时根据 g_app_landscape 设置分辨率。
       * 旋转时（app_ui_recreate）由调用方先 set_rotation 再调用本函数。 */
      if (disp && lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_0 && g_app_landscape) {
---- a/src/app/common/ui_helpers.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/common/ui_helpers.c	2026-11-13 16:16:47.467037531 +0800
+--- a/src/app/common/ui_helpers.c
++++ b/src/app/common/ui_helpers.c
 @@ -155,12 +155,16 @@
  /* ------------------------------------------------------------------ */
  int ui_get_screen_width(void)
@@ -29,8 +29,8 @@
      return g_app_landscape ? 480 : 800;
  }
  
---- a/src/app/common/album_image_cache.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/common/album_image_cache.c	2026-11-13 21:48:46.424521368 +0800
+--- a/src/app/common/album_image_cache.c
++++ b/src/app/common/album_image_cache.c
 @@ -7,6 +7,7 @@
   * 后续直接使用缓存图显示缩略图和全屏预览。
   */
@@ -57,8 +57,8 @@
      s_return_path[0] = '\0';
      if (!src_path || !src_path[0]) return NULL;
  
---- a/src/app/common/album_image_cache.h	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/common/album_image_cache.h	2026-11-13 21:48:46.426521393 +0800
+--- a/src/app/common/album_image_cache.h
++++ b/src/app/common/album_image_cache.h
 @@ -24,8 +24,8 @@
  #define ALBUM_IMAGE_CACHE_PREVIEW 1
  
@@ -70,8 +70,8 @@
  
  /**
   * @brief 返回可用于 LVGL 显示的图片路径。
---- a/src/app/common/device_config.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/common/device_config.c	2026-11-13 18:21:03.874127825 +0800
+--- a/src/app/common/device_config.c
++++ b/src/app/common/device_config.c
 @@ -152,11 +152,11 @@
  static camera_caps_t extract_camera_caps(const cJSON *root)
  {
@@ -117,18 +117,22 @@
      }
      g_dc_result.loaded                   = loaded;
  }
---- a/src/app/camera/photo_saver.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/camera/photo_saver.c	2026-11-16 01:09:19.423908158 +0800
-@@ -14,6 +14,8 @@
+--- a/src/app/camera/photo_saver.c
++++ b/src/app/camera/photo_saver.c
+@@ -14,6 +14,12 @@
   *   UI 线程通过 photo_is_busy() 轮询状态，photo_async_done() 获取完成通知。
   */
  #include "photo_saver.h"
 +#include "../common/thumb_gen.h"
-+extern int maixcam2_capture_still_jpeg_isolated(const char *path, int quality);
++#include "../camera/camera_hal.h"
++typedef void (*live_still_done_cb_t)(const char *path, int result, void *ctx);
++extern int maixcam2_capture_still_jpeg_from_preview_async(
++    camera_hal_t *camera, const char *path, int quality,
++    live_still_done_cb_t done_cb, void *ctx);
  
  #include "lvgl/lvgl.h"   /* LV_LOG_* 日志 */
  
-@@ -289,6 +291,8 @@
+@@ -289,6 +295,8 @@
  
      if (ret == 0) {
          LV_LOG_USER("拍照保存成功: %s (%dx%d)", s_last_path, width, height);
@@ -137,29 +141,41 @@
      } else {
          s_last_path[0] = '\0';
      }
-@@ -600,3 +625,20 @@
+@@ -600,3 +608,32 @@
      }
      return 0;
  }
 +
 +
-+/* MaixCAM2: 以传感器 2K 分辨率抓取一张照片到 dir，成功返回 0 并更新 s_last_path。 */
-+int photo_capture_hires(const char *dir, int quality)
++static void hires_save_done(const char *path, int result, void *ctx)
 +{
-+    if (!dir) return -1;
++    (void)ctx;
++    if (result == 0) {
++        LV_LOG_USER("2K 拍照成功: %s", path);
++        thumb_gen_submit(path);
++    } else {
++        LV_LOG_WARN("2K 拍照失败: %s (%d)", path, result);
++    }
++}
++
++/* MaixCAM2: 从常驻 2K 通道抓帧，后台编码，不中断实时预览。 */
++int photo_capture_hires(void *camera_ptr, const char *dir, int quality)
++{
++    camera_hal_t *camera = (camera_hal_t *)camera_ptr;
++    if (!camera || !dir) return -1;
 +    if (mkdir_p(dir) != 0) return -1;
 +    char path[256];
 +    make_filename(path, sizeof(path), dir, "jpg");
-+    int r = maixcam2_capture_still_jpeg_isolated(path, quality);
++    int r = maixcam2_capture_still_jpeg_from_preview_async(
++        camera, path, quality, hires_save_done, NULL);
 +    if (r != 0) return r;
 +    strncpy(s_last_path, path, sizeof(s_last_path) - 1);
 +    s_last_path[sizeof(s_last_path) - 1] = 0;
-+    LV_LOG_USER("2K 拍照成功: %s", s_last_path);
-+    thumb_gen_submit(s_last_path);
++    LV_LOG_USER("2K 拍照已提交后台保存: %s", s_last_path);
 +    return 0;
 +}
---- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_album.c	2026-11-16 09:10:03.461716166 +0800
+--- a/src/app/pages/page_album.c
++++ b/src/app/pages/page_album.c
 @@ -12,6 +12,157 @@
   *   - 全屏查看时右滑关闭全屏
   */
@@ -600,34 +616,31 @@
 +    fs_apply();
 +    LV_LOG_USER("Album: debug zoom=%.2f", z);
 +}
---- a/src/app/pages/page_home.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_home.c	2026-11-16 03:01:44.879669241 +0800
+--- a/src/app/pages/page_home.c
++++ b/src/app/pages/page_home.c
 @@ -15,6 +15,9 @@
   *   - 右侧变焦滑块面板
   */
  #include "page_home.h"
 +#include "../common/board_battery.h"
-+extern int photo_capture_hires(const char *dir, int quality);
++extern int photo_capture_hires(void *camera, const char *dir, int quality);
 +extern int maixcam2_capture_still_jpeg(const char *path, int quality);
  #include "page_album.h"               /* 相册刷新：拍照后进入相册需重新扫描 */
  #include "page_quick.h"               /* 上滑菜单：模式切换后需刷新快捷参数页 */
  #include "../app_main.h"
-@@ -1625,6 +1628,25 @@
+@@ -1625,6 +1628,22 @@
      const char *base = settings_storage_get_path();
      snprintf(g_photo_save_dir, sizeof(g_photo_save_dir), "%s/DCIM", base);
  
 +    /* MaixCAM2: 真正的 2K 拍照。
-+     * 预览相机开着时 2560x1440 通道无法重新配置（VI 通道只缩不放），
-+     * 所以这里先停预览 -> 以 2560x1440 YVU420SP 抓一帧 -> 重开预览。
-+     * 失败则回退到下面的预览帧路径（640x480）。 */
++     * 常驻 2K YVU 通道与预览共享同一 sensor；快门抓帧和 JPEG 编码
++     * 都在后台完成，不停止或重启预览。失败才回退到预览帧路径。 */
 +    {
 +        static int hires_disabled = 0;
 +        if (!hires_disabled && !g_burst_active) {
-+            home_camera_stop();
-+            int hr = photo_capture_hires(g_photo_save_dir, 95);
-+            if (g_camera_view) home_camera_start(g_camera_view);
++            int hr = photo_capture_hires(g_camera, g_photo_save_dir, 95);
 +            if (hr == 0) {
-+                home_show_toast(tr("已保存 2K 照片", "2K photo saved"));
++                home_show_toast(tr("正在保存 2K 照片", "Saving 2K photo"));
 +                return;
 +            }
 +            hires_disabled = 1;
@@ -638,7 +651,7 @@
      /* 请求 worker 线程做全分辨率拍照快照：worker 在下一帧转换时，
       * 对当前帧做"仅旋转不降采样"转换到 photo_buf（原始分辨率，如 1920x1080）。
       * 转换完成后通过 camera_preview_is_photo_ready 通知 UI 线程，
-@@ -3050,6 +3072,48 @@
+@@ -3050,6 +3069,48 @@
  /* ================================================================== */
  /* 主页创建                                                            */
  /* ================================================================== */
@@ -687,7 +700,7 @@
  static lv_obj_t *make_top_bar(lv_obj_t *parent)
  {
      lv_obj_t *bar = lv_obj_create(parent);
-@@ -3116,11 +3180,12 @@
+@@ -3116,11 +3177,12 @@
      lv_obj_set_style_bg_opa(gap, LV_OPA_TRANSP, 0);
      lv_obj_remove_flag(gap, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
  
@@ -705,7 +718,7 @@
  
      return bar;
  }
-@@ -3918,3 +3983,24 @@
+@@ -3918,3 +3980,24 @@
          snprintf(buf, sz, "%s %s %s", mode_icon, g_res_opts[g_sel_res], STAB_OPTS[g_sel_stab]);
      }
  }
@@ -730,8 +743,8 @@
 +{
 +    on_album_click(NULL);
 +}
---- a/src/app/settings/settings_storage.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/settings/settings_storage.c	2026-11-13 16:25:03.884987414 +0800
+--- a/src/app/settings/settings_storage.c
++++ b/src/app/settings/settings_storage.c
 @@ -92,10 +92,11 @@
  static const char * get_internal_base_path(void)
  {
