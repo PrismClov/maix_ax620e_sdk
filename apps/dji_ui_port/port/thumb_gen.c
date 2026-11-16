@@ -223,39 +223,24 @@ static void generate_preview(const char *src, int gen)
     int comp = decode_jpeg(src, &rgb, &w, &h, 2560);
     if (comp <= 0 || !rgb) { fprintf(stderr, "[thumb] preview decode failed: %s\n", src); return; }
 
-    /* 解码到原始分辨率，再用 box 平均缩到屏幕尺寸（640x480 内），
-     * 由 LVGL 以 1:1 显示——避免依赖 LVGL 的大图缩放（实测不生效） */
-    const int fit_w = 640, fit_h = 480;
-    int tw = fit_w, th = (int)((int64_t)h * fit_w / w);
-    if (th > fit_h) { th = fit_h; tw = (int)((int64_t)w * fit_h / h); }
-    if (tw < 1) tw = 1;
-    if (th < 1) th = 1;
+    /* 全屏放大查看需要原始分辨率，最多保留 2560x1440 */
+    int tw = w, th = h;
+    if ((int64_t)w * h > (int64_t)2560 * 1440) {
+        tw = 2560;
+        th = (int)((int64_t)h * 2560 / w);
+        if (th > 1440) { th = 1440; tw = (int)((int64_t)w * 1440 / h); }
+    }
 
     uint16_t *out = (uint16_t *)malloc((size_t)tw * th * 2);
     if (!out) { free(rgb); return; }
-
     for (int y = 0; y < th; y++) {
-        int sy0 = y * h / th;
-        int sy1 = (y + 1) * h / th;
-        if (sy1 <= sy0) sy1 = sy0 + 1;
+        int sy = (th == h) ? y : y * h / th;
+        const unsigned char *row = rgb + (size_t)sy * w * comp;
         uint16_t *drow = out + (size_t)y * tw;
         for (int x = 0; x < tw; x++) {
-            int sx0 = x * w / tw;
-            int sx1 = (x + 1) * w / tw;
-            if (sx1 <= sx0) sx1 = sx0 + 1;
-            uint32_t rs = 0, gs = 0, bs = 0, n = 0;
-            for (int sy = sy0; sy < sy1; sy++) {
-                const unsigned char *row = rgb + (size_t)sy * w * comp;
-                for (int sx = sx0; sx < sx1; sx++) {
-                    const unsigned char *p = row + (size_t)sx * comp;
-                    if (comp == 3) { rs += p[0]; gs += p[1]; bs += p[2]; }
-                    else { rs += p[0]; gs += p[0]; bs += p[0]; }
-                    n++;
-                }
-            }
-            if (!n) n = 1;
-            uint8_t r = (uint8_t)(rs / n), g = (uint8_t)(gs / n), b = (uint8_t)(bs / n);
-            drow[x] = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+            const unsigned char *p = row + (size_t)((tw == w) ? x : x * w / tw) * comp;
+            if (comp == 3) drow[x] = (uint16_t)(((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3));
+            else           drow[x] = (uint16_t)(((p[0] & 0xF8) << 8) | ((p[0] & 0xFC) << 3) | (p[0] >> 3));
         }
     }
     free(rgb);

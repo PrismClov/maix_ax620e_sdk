@@ -187,8 +187,8 @@
 +    return 0;
 +}
 --- a/src/app/pages/page_album.c	2026-10-30 19:06:53.000000000 +0800
-+++ b/src/app/pages/page_album.c	2026-11-16 03:06:17.557040738 +0800
-@@ -12,6 +12,53 @@
++++ b/src/app/pages/page_album.c	2026-11-16 09:10:03.461716166 +0800
+@@ -12,6 +12,157 @@
   *   - 全屏查看时右滑关闭全屏
   */
  #include "page_album.h"
@@ -204,33 +204,137 @@
 +static unsigned char *g_fs_buf = NULL;
 +static lv_image_dsc_t g_fs_dsc;
 +
++/* ---- fullscreen zoom / pan ------------------------------------------- */
++static uint16_t *g_fs_src = NULL;   /* 原图 RGB565（最多 2560x1440） */
++static int g_fs_sw = 0, g_fs_sh = 0;
++static uint16_t *g_fs_view = NULL;  /* 屏幕尺寸的合成结果 640x480 */
++static float g_fs_fit = 1.0f;       /* 1x 时铺满屏幕的缩放比 */
++static float g_fs_zoom = 1.0f;      /* 用户缩放倍率 */
++static float g_fs_cx = 0, g_fs_cy = 0;
++static uint32_t g_fs_last_tap = 0;
++static int g_fs_last_x = 0, g_fs_last_y = 0;
++
++static void fs_render(void)
++{
++    if (!g_fs_view) return;
++    int sw = ui_get_screen_width(), sh = ui_get_screen_height();
++    int vw = sw, vh = sh;
++    const float cur = g_fs_fit * g_fs_zoom;
++
++    for (int y = 0; y < vh; y++) {
++        uint16_t *drow = g_fs_view + (size_t)y * vw;
++        for (int x = 0; x < vw; x++) {
++            float ix = g_fs_cx + ((float)x - vw * 0.5f) / cur;
++            float iy = g_fs_cy + ((float)y - vh * 0.5f) / cur;
++            if (!g_fs_src || ix < 0 || iy < 0 || ix >= g_fs_sw || iy >= g_fs_sh) {
++                drow[x] = 0x0000;
++            } else {
++                drow[x] = g_fs_src[(size_t)(int)iy * g_fs_sw + (int)ix];
++            }
++        }
++    }
++}
++
++static void fs_apply(void)
++{
++    if (!g_fs_view) return;
++    int sw = ui_get_screen_width(), sh = ui_get_screen_height();
++    memset(&g_fs_dsc, 0, sizeof(g_fs_dsc));
++    g_fs_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
++    g_fs_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
++    g_fs_dsc.header.w = sw;
++    g_fs_dsc.header.h = sh;
++    g_fs_dsc.header.stride = (uint32_t)sw * 2;
++    g_fs_dsc.data_size = (uint32_t)sw * sh * 2;
++    g_fs_dsc.data = (const uint8_t *)g_fs_view;
++    if (g_full_img) {
++        lv_image_set_src(g_full_img, &g_fs_dsc);
++        lv_image_set_scale(g_full_img, 256);
++    }
++    lv_obj_invalidate(g_full_img);
++}
++
++/* 双击：1x <-> 2.5x；放大时按住拖动平移 */
++static void fs_click_cb(lv_event_t *e)
++{
++    lv_indev_t *indev = lv_indev_active();
++    if (!indev) return;
++    lv_point_t p;
++    lv_indev_get_point(indev, &p);
++    uint32_t now = lv_tick_get();
++    if (now - g_fs_last_tap < 350 &&
++        abs(p.x - g_fs_last_x) < 40 && abs(p.y - g_fs_last_y) < 40) {
++        if (g_fs_zoom > 1.01f) {
++            g_fs_zoom = 1.0f;
++            g_fs_cx = g_fs_sw * 0.5f;
++            g_fs_cy = g_fs_sh * 0.5f;
++        } else {
++            float cur = g_fs_fit * 2.5f;
++            g_fs_zoom = 2.5f;
++            g_fs_cx = g_fs_sw * 0.5f + ((float)p.x - ui_get_screen_width() * 0.5f) / cur;
++            g_fs_cy = g_fs_sh * 0.5f + ((float)p.y - ui_get_screen_height() * 0.5f) / cur;
++        }
++        fs_render();
++        fs_apply();
++        LV_LOG_USER("Album: zoom=%.1f center=(%.0f,%.0f)", g_fs_zoom, g_fs_cx, g_fs_cy);
++        g_fs_last_tap = 0;
++        return;
++    }
++    g_fs_last_tap = now;
++    g_fs_last_x = p.x;
++    g_fs_last_y = p.y;
++}
++
++static void fs_pressing_cb(lv_event_t *e)
++{
++    (void)e;
++    if (g_fs_zoom <= 1.01f || !g_fs_src) return;
++    lv_indev_t *indev = lv_indev_active();
++    if (!indev) return;
++    lv_point_t p;
++    lv_indev_get_point(indev, &p);
++    static lv_point_t last = {0, 0};
++    static bool init = false;
++    if (!init) { last = p; init = true; return; }
++    float cur = g_fs_fit * g_fs_zoom;
++    g_fs_cx -= (p.x - last.x) / cur;
++    g_fs_cy -= (p.y - last.y) / cur;
++    if (g_fs_cx < 0) g_fs_cx = 0;
++    if (g_fs_cy < 0) g_fs_cy = 0;
++    if (g_fs_cx > g_fs_sw) g_fs_cx = g_fs_sw;
++    if (g_fs_cy > g_fs_sh) g_fs_cy = g_fs_sh;
++    last = p;
++    fs_render();
++    fs_apply();
++}
++
 +static void fs_poll_cb(lv_timer_t *t)
 +{
 +    (void)t;
 +    char *buf = NULL; int w = 0, h = 0, gen = 0;
 +    while (thumb_preview_poll(&buf, &w, &h, &gen)) {
 +        if (gen != g_fs_gen) { free(buf); buf = NULL; continue; }
-+        free(g_fs_buf);
-+        g_fs_buf = (unsigned char *)buf;
-+        memset(&g_fs_dsc, 0, sizeof(g_fs_dsc));
-+        g_fs_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-+        g_fs_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-+        g_fs_dsc.header.w = w;
-+        g_fs_dsc.header.h = h;
-+        g_fs_dsc.header.stride = (uint32_t)w * 2;
-+        g_fs_dsc.data_size = (uint32_t)w * h * 2;
-+        g_fs_dsc.data = g_fs_buf;
-+        if (g_full_img) {
-+            lv_image_set_src(g_full_img, &g_fs_dsc);
-+            /* worker 已经把图缩到屏幕内，这里 1:1 居中显示即可 */
-+            lv_image_set_scale(g_full_img, 256);
-+            LV_LOG_USER("Album: fullscreen dsc=%dx%d obj=%dx%d at (%d,%d) screen=%dx%d",
-+                        (int)g_fs_dsc.header.w, (int)g_fs_dsc.header.h,
-+                        (int)lv_obj_get_width(g_full_img), (int)lv_obj_get_height(g_full_img),
-+                        (int)lv_obj_get_x(g_full_img), (int)lv_obj_get_y(g_full_img),
-+                        ui_get_screen_width(), ui_get_screen_height());
++        free(g_fs_src);
++        g_fs_src = (uint16_t *)buf;
++        g_fs_sw = w;
++        g_fs_sh = h;
++
++        int sw = ui_get_screen_width(), sh = ui_get_screen_height();
++        if (!g_fs_view) {
++            g_fs_view = (uint16_t *)malloc((size_t)sw * sh * 2);
++            if (!g_fs_view) { LV_LOG_ERROR("fullscreen: out of memory"); return; }
 +        }
-+        LV_LOG_USER("Album: fullscreen ready %dx%d gen=%d", w, h, gen);
++        float fx = (float)sw / (float)(w > 0 ? w : 1);
++        float fy = (float)sh / (float)(h > 0 ? h : 1);
++        g_fs_fit = (fx < fy) ? fx : fy;
++        g_fs_zoom = 1.0f;
++        g_fs_cx = w * 0.5f;
++        g_fs_cy = h * 0.5f;
++        g_fs_last_tap = 0;
++        fs_render();
++        fs_apply();
++        LV_LOG_USER("Album: fullscreen %dx%d fit=%.3f obj=%dx%d", w, h, g_fs_fit,
++                    (int)lv_obj_get_width(g_full_img), (int)lv_obj_get_height(g_full_img));
 +        break;
 +    }
 +}
@@ -242,7 +346,7 @@
  #include "../app_main.h"
  #include "../common/ui_helpers.h"
  #include "../common/app_i18n.h"
-@@ -50,7 +97,6 @@
+@@ -50,7 +201,6 @@
  static lv_obj_t *g_count_label;   /* 照片计数标签 */
  static lv_obj_t *g_arrange_btn;   /* 排列切换按钮 */
  static lv_obj_t *g_fullscreen;        /* 全屏查看 overlay */
@@ -250,7 +354,7 @@
  static lv_obj_t *g_video_placeholder; /* 全屏视频占位提示 */
  static lv_obj_t *g_context_menu;      /* 长按弹出的二级菜单 overlay */
  static int g_arrange_mode = 0;    /* 0=3列小图, 1=2列大图 */
-@@ -206,6 +252,31 @@
+@@ -206,6 +356,31 @@
  }
  
  /* 对外接口：从根目录开始扫描（depth=0） */
@@ -282,7 +386,7 @@
  static void scan_dir(const char *dir, int *count)
  {
      scan_dir_impl(dir, count, 0);
-@@ -253,9 +324,12 @@
+@@ -253,9 +428,12 @@
  
      for (int i = 0; i < n; i++) {
          scan_dir(s_scan_dirs[i], &g_photo_count);
@@ -296,15 +400,18 @@
                  g_photo_count, n, base ? base : "NULL");
      // #region debug-point B:album
      dbg_log("B", "page_album.c:refresh_photo_list", "done");
-@@ -311,6 +385,7 @@
+@@ -311,6 +489,10 @@
  
  static void fullscreen_close(void)
  {
 +    if (g_album_toolbar) lv_obj_remove_flag(g_album_toolbar, LV_OBJ_FLAG_HIDDEN);
++    free(g_fs_src); g_fs_src = NULL;
++    g_fs_sw = g_fs_sh = 0;
++    g_fs_zoom = 1.0f;
      if (g_fullscreen) {
          lv_obj_add_flag(g_fullscreen, LV_OBJ_FLAG_HIDDEN);
          LV_LOG_USER("Album: fullscreen closed");
-@@ -336,11 +411,15 @@
+@@ -336,11 +518,15 @@
      lv_obj_t *active = lv_tileview_get_tile_active(g_tv);
  
      if (active == g_tile) {
@@ -320,7 +427,7 @@
      /* 离开相册：关闭 overlay 和播放器 */
      video_player_close();
      fullscreen_close();
-@@ -419,29 +498,26 @@
+@@ -419,29 +605,26 @@
      if (g_video_placeholder) lv_obj_add_flag(g_video_placeholder, LV_OBJ_FLAG_HIDDEN);
      if (g_full_img) lv_obj_remove_flag(g_full_img, LV_OBJ_FLAG_HIDDEN);
      if (g_full_img) {
@@ -360,7 +467,14 @@
      lv_obj_set_style_bg_color(g_fullscreen, lv_color_hex(0x000000), 0);
      lv_obj_set_style_bg_opa(g_fullscreen, LV_OPA_COVER, 0);
      lv_obj_set_style_pad_all(g_fullscreen, 0, 0);
-@@ -455,7 +531,11 @@
+@@ -452,10 +635,18 @@
+ 
+     /* 右滑/左滑关闭全屏 */
+     lv_obj_add_event_cb(g_fullscreen, fullscreen_gesture_cb, LV_EVENT_GESTURE, NULL);
++    /* 双击放大/还原，放大后拖动平移 */
++    lv_obj_add_flag(g_fullscreen, LV_OBJ_FLAG_CLICKABLE);
++    lv_obj_add_event_cb(g_fullscreen, fs_click_cb, LV_EVENT_CLICKED, NULL);
++    lv_obj_add_event_cb(g_fullscreen, fs_pressing_cb, LV_EVENT_PRESSING, NULL);
  
      /* 全屏图片 */
      g_full_img = lv_image_create(g_fullscreen);
@@ -373,7 +487,7 @@
      lv_obj_set_style_bg_color(g_full_img, lv_color_hex(0x000000), 0);
      /* 不设置 image_recolor：recolor + OPA_COVER 会把图片完全覆盖成纯色，
       * 导致照片显示为灰色（之前的 bug 根因）。保持原色显示。 */
-@@ -1012,6 +1092,17 @@
+@@ -1012,6 +1203,17 @@
      lv_obj_t *img = lv_image_create(btn);
      lv_image_set_src(img, thumb_path);
      lv_obj_set_size(img, lv_pct(100), lv_pct(100));
@@ -391,7 +505,7 @@
      lv_obj_set_style_bg_color(img, lv_color_hex(0x1A1A1A), 0);
      lv_obj_center(img);
  
-@@ -1056,9 +1147,19 @@
+@@ -1056,9 +1258,19 @@
          return create_photo_cell(parent, idx, cell_size);
      }
  
@@ -414,7 +528,7 @@
      if (!thumb_path) {
          LV_LOG_WARN("Album: thumbnail %d cache unavailable, use placeholder", idx);
          return create_placeholder(parent, cell_size);
-@@ -1096,6 +1197,17 @@
+@@ -1096,6 +1308,17 @@
      lv_obj_t *img = lv_image_create(btn);
      lv_image_set_src(img, thumb_path);
      lv_obj_set_size(img, lv_pct(100), lv_pct(100));
@@ -432,7 +546,7 @@
      /* 不设置 image_recolor：recolor + OPA_COVER 会把缩略图完全覆盖成纯色，
       * 导致照片显示为灰色（之前的 bug 根因）。保持原色显示。 */
      lv_obj_set_style_bg_color(img, lv_color_hex(0x1A1A1A), 0);
-@@ -1460,6 +1572,7 @@
+@@ -1460,6 +1683,7 @@
  
      /* 顶部工具栏 */
      lv_obj_t *toolbar = lv_obj_create(g_tile);
@@ -440,7 +554,7 @@
      lv_obj_set_width(toolbar, lv_pct(100));
      lv_obj_set_height(toolbar, ui_scale_min(44));
      lv_obj_set_flex_flow(toolbar, LV_FLEX_FLOW_ROW);
-@@ -1488,7 +1601,8 @@
+@@ -1488,7 +1712,8 @@
      lv_obj_add_event_cb(back_btn, on_back_to_home_cb, LV_EVENT_CLICKED, NULL);
  
      lv_obj_t *storage_lbl = lv_label_create(toolbar);
@@ -450,7 +564,7 @@
      lv_obj_set_style_text_color(storage_lbl, lv_color_hex(COLOR_SECONDARY), 0);
      update_storage_summary(storage_lbl);
  
-@@ -1543,6 +1657,21 @@
+@@ -1543,6 +1768,21 @@
      return g_tile;
  }
  
@@ -472,7 +586,7 @@
  void page_album_refresh(void)
  {
      /* 退出相册时可能停留在全屏查看、视频播放或长按菜单界面，下次进入应回到相册主页面。
-@@ -1556,10 +1685,17 @@
+@@ -1556,10 +1796,17 @@
      }
      g_context_idx = -1;
  
@@ -492,7 +606,7 @@
  }
  
  void page_album_destroy(void)
-@@ -1598,3 +1734,9 @@
+@@ -1598,3 +1845,21 @@
      g_arrange_btn  = NULL;
      g_photo_count  = 0;
  }
@@ -501,6 +615,18 @@
 +void page_album_debug_open(int idx)
 +{
 +    open_fullscreen(idx);
++}
++
++/* 调试：直接设置放大倍率并重绘（配合 /tmp/cmd "zoom N"） */
++void page_album_debug_zoom(float z)
++{
++    if (!g_fs_src || !g_fs_view) return;
++    g_fs_zoom = z;
++    g_fs_cx = g_fs_sw * 0.5f;
++    g_fs_cy = g_fs_sh * 0.5f;
++    fs_render();
++    fs_apply();
++    LV_LOG_USER("Album: debug zoom=%.2f", z);
 +}
 --- a/src/app/pages/page_home.c	2026-10-30 19:06:53.000000000 +0800
 +++ b/src/app/pages/page_home.c	2026-11-16 03:01:44.879669241 +0800

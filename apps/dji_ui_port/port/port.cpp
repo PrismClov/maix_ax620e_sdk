@@ -246,6 +246,14 @@ extern "C" int maix_port_init(int rotate)
                 log::info("debug: goto album, will open fullscreen %d in 1.2s", g_dbg_full_idx);
             }
         }
+        if (access("/tmp/zoom", F_OK) == 0) {
+            char zbuf[32] = {0};
+            FILE *zf = fopen("/tmp/zoom", "r");
+            if (zf) { if (fgets(zbuf, sizeof(zbuf), zf)) {} fclose(zf); }
+            unlink("/tmp/zoom");
+            extern void page_album_debug_zoom(float z);
+            page_album_debug_zoom((float)atof(zbuf));
+        }
         if (g_dbg_full_idx >= 0 && (int32_t)((uint32_t)time::ticks_ms() - g_dbg_full_at) >= 0) {
             extern void page_album_debug_open(int idx);
             page_album_debug_open(g_dbg_full_idx);
