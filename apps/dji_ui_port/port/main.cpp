@@ -12,6 +12,7 @@ extern "C" {
 }
 
 extern "C" int maixcam2_capture_still_jpeg(const char *path, int quality);
+extern "C" int maixcam2_capture_still_jpeg_isolated(const char *path, int quality);
 extern "C" int maix_port_init(int rotate);
 extern "C" int maix_port_screenshot(const char *path);
 extern "C" void page_home_debug_goto_album(void);
@@ -61,6 +62,20 @@ static int probe_resolutions()
 
 int main(int argc, char *argv[])
 {
+    if (getenv("DJI_STILL_HELPER")) {
+        const char *path = getenv("DJI_STILL_HELPER_PATH");
+        const char *quality = getenv("DJI_STILL_HELPER_QUALITY");
+        return maixcam2_capture_still_jpeg(path, quality ? atoi(quality) : 95);
+    }
+    if (getenv("DJI_STILL_ISOLATED_TEST")) {
+        if (!getenv("DJI_STILL_NOPREVIEW")) {
+            maix::camera::Camera prev(640, 480, maix::image::FMT_RGB888);
+            maix::image::Image *f = prev.read(true, 2000);
+            delete f;
+        }
+        return maixcam2_capture_still_jpeg_isolated(
+            "/root/photos/test_isolated.jpg", 95);
+    }
     if (getenv("DJI_PROBE")) return probe_resolutions();
     if (getenv("DJI_STILL_TEST")) {
         if (!getenv("DJI_STILL_NOPREVIEW")) {

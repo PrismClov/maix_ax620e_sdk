@@ -124,7 +124,7 @@
   */
  #include "photo_saver.h"
 +#include "../common/thumb_gen.h"
-+extern int maixcam2_capture_still_jpeg(const char *path, int quality);
++extern int maixcam2_capture_still_jpeg_isolated(const char *path, int quality);
  
  #include "lvgl/lvgl.h"   /* LV_LOG_* 日志 */
  
@@ -137,34 +137,6 @@
      } else {
          s_last_path[0] = '\0';
      }
-@@ -415,6 +419,27 @@
-         return -1;
-     }
- 
-+    /* MaixCAM2: capture a true 1280x720 still from the sensor instead of the
-+     * 640x480 preview frame. Falls back to the preview path below on failure. */
-+    {
-+        static int hires_ok = 1;
-+        if (hires_ok) {
-+            char hires_path[256];
-+            make_filename(hires_path, sizeof(hires_path), dir, "jpg");
-+            uint64_t t0 = lv_tick_get();
-+            if (maixcam2_capture_still_jpeg(hires_path, 95) == 0) {
-+                strncpy(s_last_path, hires_path, sizeof(s_last_path) - 1);
-+                s_last_path[sizeof(s_last_path) - 1] = 0;
-+                LV_LOG_USER("720p 拍照成功: %s (%llums)", s_last_path,
-+                            (unsigned long long)(lv_tick_get() - t0));
-+                thumb_gen_submit(s_last_path);
-+                return 0;
-+            }
-+            LV_LOG_WARN("720p 拍照失败，回退到预览帧路径");
-+            hires_ok = 0;   /* 失败一次后不再拖慢后续拍照 */
-+        }
-+    }
-+
-     /* 步骤 1：中心裁剪到目标画幅 */
-     uint16_t *cropped = NULL;
-     int crop_w = 0, crop_h = 0;
 @@ -600,3 +625,20 @@
      }
      return 0;
@@ -178,7 +150,7 @@
 +    if (mkdir_p(dir) != 0) return -1;
 +    char path[256];
 +    make_filename(path, sizeof(path), dir, "jpg");
-+    int r = maixcam2_capture_still_jpeg(path, quality);
++    int r = maixcam2_capture_still_jpeg_isolated(path, quality);
 +    if (r != 0) return r;
 +    strncpy(s_last_path, path, sizeof(s_last_path) - 1);
 +    s_last_path[sizeof(s_last_path) - 1] = 0;

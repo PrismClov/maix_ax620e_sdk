@@ -11,7 +11,13 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <string>
 #include <vector>
+#include <limits.h>
+#include <signal.h>
+#include <spawn.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 extern "C" {
 #include "camera_hal.h"
@@ -246,6 +252,23 @@ static void nv21_to_rgb888(const uint8_t *src, int w, int h, uint8_t *dst)
     }
 }
 
+/* ISP 切换 sensor mode 后，AE/AWB 会重新收敛。只看固定帧数不可靠：
+ * 在 2K 启动阶段，前几帧可能过曝，也可能因为场景亮度而很快发生跳变。
+ * 从 Y 平面抽样计算平均亮度，等亮度连续稳定后再保存最后一帧。 */
+static int y_plane_luma(const uint8_t *src, int w, int h)
+{
+    if (!src || w <= 0 || h <= 0) return -1;
+    const size_t pixels = (size_t)w * h;
+    const size_t step = pixels / 4096 > 1 ? pixels / 4096 : 1;
+    uint64_t sum = 0;
+    size_t count = 0;
+    for (size_t i = 0; i < pixels; i += step) {
+        sum += src[i];
+        count++;
+    }
+    return count ? (int)(sum / count) : -1;
+}
+
 extern "C" int maixcam2_capture_still_jpeg(const char *path, int quality)
 {
     if (!path) return -1;
@@ -256,23 +279,59 @@ extern "C" int maixcam2_capture_still_jpeg(const char *path, int quality)
         int ch = getenv("DJI_STILL_H") ? atoi(getenv("DJI_STILL_H")) : 1440;
         bool use_rgb = getenv("DJI_STILL_RGB") != nullptr;
         int cfps = getenv("DJI_STILL_FPS") ? atoi(getenv("DJI_STILL_FPS")) : -1;
-        camera::Camera cam(cw, ch, use_rgb ? image::FMT_RGB888 : image::FMT_YVU420SP, nullptr, cfps);
+        image::Format still_fmt = use_rgb ? image::FMT_RGB888 : image::FMT_YVU420SP;
+        /* MaixCDK/AX VI 在预览相机 close 后仍可能保留上一次的窗口状态。
+         * 显式指定 sensor 全幅，避免 2560x1440 输出实际只取到预览阶段的
+         * 小 ROI；构造时先不 open，使 windowing 在 VIN 配置前生效。 */
+        camera::Camera cam(cw, ch, still_fmt, nullptr, cfps, 3, false);
+        err::Err window_ret = cam.set_windowing({0, 0, cw, ch});
+        if (window_ret != err::ERR_NONE) return -5;
+        err::Err open_ret = cam.open(cw, ch, still_fmt, cfps, 3);
+        if (open_ret != err::ERR_NONE) return -5;
         uint64_t t1 = time::ticks_ms();
-        /* 切换 sensor 模式后 AE/AWB 从默认值重新收敛，首帧必然过曝/偏色。
-         * 丢掉前几帧，只保留收敛后的最后一帧。 */
+        /* 切换 sensor 模式后 AE/AWB 从默认值重新收敛。至少丢弃 12 帧，
+         * 再要求相邻帧 Y 平面平均亮度连续稳定，避免固定 sleep 或固定帧数
+         * 在特定光照下仍保存到过曝帧。 */
         image::Image *yuv = nullptr;
-        const int warmup = 12;
-        for (int i = 0; i < warmup; i++) {
+        const int warmup_min = getenv("DJI_STILL_WARMUP")
+                                   ? atoi(getenv("DJI_STILL_WARMUP")) : 12;
+        const int warmup_max = getenv("DJI_STILL_WARMUP_MAX")
+                                   ? atoi(getenv("DJI_STILL_WARMUP_MAX")) : 60;
+        const int stable_need = getenv("DJI_STILL_STABLE_FRAMES")
+                                    ? atoi(getenv("DJI_STILL_STABLE_FRAMES")) : 3;
+        const int luma_tol = getenv("DJI_STILL_LUMA_TOL")
+                                 ? atoi(getenv("DJI_STILL_LUMA_TOL")) : 3;
+        int warmup_used = 0;
+        int luma_start = -1;
+        int luma_prev = -1;
+        int luma_last = -1;
+        int stable_frames = 0;
+        for (int i = 0; i < warmup_max; i++) {
             image::Image *f = cam.read(true, 3000);
             if (!f) break;
             if (yuv) delete yuv;
             yuv = f;
+            warmup_used = i + 1;
+
+            const int luma = y_plane_luma((const uint8_t *)yuv->data(),
+                                          yuv->width(), yuv->height());
+            if (luma_start < 0) luma_start = luma;
+            if (luma >= 0 && luma_prev >= 0 && abs(luma - luma_prev) <= luma_tol) {
+                stable_frames++;
+            } else {
+                stable_frames = 0;
+            }
+            luma_prev = luma;
+            luma_last = luma;
+            if (warmup_used >= warmup_min && stable_frames >= stable_need) break;
         }
         uint64_t t2 = time::ticks_ms();
         if (!yuv) {
             log::warn("still: read timeout");
             return -2;
         }
+        log::info("still: warmup=%d frames luma %d -> %d stable=%d/%d",
+                  warmup_used, luma_start, luma_last, stable_frames, stable_need);
         int w = yuv->width(), h = yuv->height();
         if (use_rgb) {
             err::Err re = yuv->save(path, quality);
@@ -305,4 +364,55 @@ extern "C" int maixcam2_capture_still_jpeg(const char *path, int quality)
         log::warn("still: %s", e.what());
         return -5;
     }
+}
+
+/* 预览阶段会在 MaixCDK/AX VI 驱动中留下进程级窗口状态。即使 close()
+ * 后用完整 sensor 分辨率重新 open，后续 2K 帧仍可能只包含预览阶段的小 ROI。
+ * 因此快门在一个全新的本进程副本中调用独立抓帧函数；子进程不初始化 LVGL，
+ * 抓到照片后立即退出，父进程负责等待结果并恢复预览。 */
+extern "C" int maixcam2_capture_still_jpeg_isolated(const char *path, int quality)
+{
+    if (!path) return -1;
+
+    char exe[PATH_MAX];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0 || n >= (ssize_t)sizeof(exe)) return -1;
+    exe[n] = '\0';
+
+    std::vector<std::string> env_storage;
+    extern char **environ;
+    for (char **e = environ; e && *e; e++) env_storage.emplace_back(*e);
+    env_storage.emplace_back("DJI_STILL_HELPER=1");
+    env_storage.emplace_back(std::string("DJI_STILL_HELPER_PATH=") + path);
+    env_storage.emplace_back(std::string("DJI_STILL_HELPER_QUALITY=") +
+                             std::to_string(quality));
+    std::vector<char *> envp;
+    envp.reserve(env_storage.size() + 1);
+    for (auto &s : env_storage) envp.push_back(const_cast<char *>(s.c_str()));
+    envp.push_back(nullptr);
+    char *argv[] = {exe, nullptr};
+
+    pid_t pid = -1;
+    int spawn_ret = posix_spawn(&pid, exe, nullptr, nullptr, argv, envp.data());
+    if (spawn_ret != 0) {
+        log::warn("still(helper): posix_spawn failed: %d", spawn_ret);
+        return -1;
+    }
+
+    const uint64_t deadline = time::ticks_ms() + 20000;
+    int status = 0;
+    while (time::ticks_ms() < deadline) {
+        pid_t ret = waitpid(pid, &status, WNOHANG);
+        if (ret == pid) {
+            if (WIFEXITED(status)) return WEXITSTATUS(status);
+            if (WIFSIGNALED(status)) return -128 - WTERMSIG(status);
+            return -1;
+        }
+        if (ret < 0) return -1;
+        time::sleep_ms(20);
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    log::warn("still(helper): timeout");
+    return -6;
 }
